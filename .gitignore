@@ -1,2 +1,7 @@
 .venv
 data/
+.vscode
+cached/
+output-small/
+runs/
+__pycache__

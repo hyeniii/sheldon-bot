@@ -1,18 +1,43 @@
-import src.modules
-import src.args
+import logging
+import os
+import pickle
+import pandas as pd
+
+import torch
+from torch.utils.data import Dataset
+
+from transformers import (
+    MODEL_WITH_LM_HEAD_MAPPING,
+    PreTrainedTokenizer,
+)
+
+# Configs
+logger = logging.getLogger(__name__)
+
+MODEL_CONFIG_CLASSES = list(MODEL_WITH_LM_HEAD_MAPPING.keys())
+MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
 
 def construct_conv(row, tokenizer, eos=True):
     """Encode dialogue to tokens
     """
     flatten = lambda l: [item for sublist in l for item in sublist]
-    conv = list(reversed([tokenizer.encode(x) + [tokenizer.eos_token_id] for x in row]))
+    conv = []
+    for x in row:
+        # Convert NaN to a string (empty string or placeholder)
+        if pd.isna(x):
+            x = ""  # or x = "[UNK]"
+
+        encoded = tokenizer.encode(x) + [tokenizer.eos_token_id]
+        conv.append(encoded)
+
+    conv = list(reversed(conv))
     conv = flatten(conv)
     return conv
 
 class ConversationDataset(Dataset):
     def __init__(self, tokenizer: PreTrainedTokenizer, args, df, block_size=512):
         # Adjusting block size for tokenizer
-        block_size = block_size - (tokenizer.max_len - tokenizer.max_len_single_sentence)
+        block_size = block_size - (tokenizer.model_max_length - tokenizer.max_len_single_sentence)
 
         directory = args.cache_dir
         cached_features_file = os.path.join(
@@ -30,7 +55,7 @@ class ConversationDataset(Dataset):
             self.examples = []
             for _, row in df.iterrows():
                 conv = construct_conv(row, tokenizer)
-                self.exmaples.append(conv)
+                self.examples.append(conv)
             
             logger.info("Saving features into cached file %s", cached_features_file)
             with open(cached_features_file, 'wb') as handle:

@@ -1,7 +1,28 @@
-import src.args
-import src.modules
+import glob
+import logging
+import os
+
+import pandas as pd
+import numpy as np
+import torch
+
+from transformers import (
+    MODEL_WITH_LM_HEAD_MAPPING,
+    WEIGHTS_NAME,
+    AutoConfig,
+    AutoModelWithLMHead,
+    AutoTokenizer,
+)
+from src.args import Args
 import src.helper as h 
 from src.trainer import train
+from src.evaluate import evaluate
+
+# Configs
+logger = logging.getLogger(__name__)
+
+MODEL_CONFIG_CLASSES = list(MODEL_WITH_LM_HEAD_MAPPING.keys())
+MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
 
 def main(df_train, df_val):
     args = Args()
@@ -47,7 +68,7 @@ def main(df_train, df_val):
     )
 
     # Set seed
-    set_seed(args)
+    h.set_seed(args)
 
     config = AutoConfig.from_pretrained(args.config_name, cache_dir=args.cache_dir)
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_name, cache_dir=args.cache_dir)
@@ -63,7 +84,7 @@ def main(df_train, df_val):
 
     # Training
     if args.do_train:
-        train_dataset = h.load_and_cache_examples(args, tokenizer, df_trn, df_val, evaluate=False)
+        train_dataset = h.load_and_cache_examples(args, tokenizer, df_train, df_val, evaluate=False)
 
         global_step, tr_loss = train(args, train_dataset, model, tokenizer)
         logger.info(" global_step = %s, average loss = %s", global_step, tr_loss)
@@ -106,8 +127,13 @@ def main(df_train, df_val):
 
             model = AutoModelWithLMHead.from_pretrained(checkpoint)
             model.to(args.device)
-            result = evaluate(args, model, tokenizer, df_trn, df_val, prefix=prefix)
+            result = evaluate(args, model, tokenizer, df_train, df_val, prefix=prefix)
             result = dict((k + "_{}".format(global_step), v) for k, v in result.items())
             results.update(result)
 
     return results
+
+if __name__ == "__main__":
+    df_train = pd.read_csv("data/sheldon_train.csv")
+    df_val = pd.read_csv("data/sheldon_val.csv")
+    main(df_train, df_val)

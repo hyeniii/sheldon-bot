@@ -1,6 +1,23 @@
-import src.modules
-import src.args
-from dataset import ConversationDataset
+import glob
+import logging
+import os
+import random
+import re
+import shutil
+
+import numpy as np
+import torch
+
+from transformers import (
+    MODEL_WITH_LM_HEAD_MAPPING,
+)
+from src.dataset import ConversationDataset
+
+# Configs
+logger = logging.getLogger(__name__)
+
+MODEL_CONFIG_CLASSES = list(MODEL_WITH_LM_HEAD_MAPPING.keys())
+MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
 
 def load_and_cache_examples(args, tokenizer, df_train, df_val, evaluate=False):
     return ConversationDataset(tokenizer, args, df_val if evaluate else df_train)
@@ -23,8 +40,8 @@ def _sorted_checkpoints(args, checkpoint_prefix="checkpoint", use_mtime=False):
             regex_match = re.match(".*{}-([0-9]+)".format(checkpoint_prefix), path)
             if regex_match and regex_match.groups():
                 ordering_and_checkpoint_path.append((int(regex_match.groups()[0]), path))
-    chekcpoint_sorted = sorted(ordering_and_checkpoint_path)
-    chekcpoint_sorted = [checkpoint[1] for checkpoint in checkpoint_sorted]
+    checkpoint_sorted = sorted(ordering_and_checkpoint_path)
+    checkpoint_sorted = [checkpoint[1] for checkpoint in checkpoint_sorted]
     return checkpoint_sorted
 
 def _rotate_checkpoints(args, checkpoint_prefix="checkpoint", use_mtime=False):

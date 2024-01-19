@@ -1,7 +1,34 @@
-import src.args
-import src.modules
+import logging
+import os
+from typing import List
+import torch
+
+from torch.nn.utils.rnn import pad_sequence
+from torch.utils.data import DataLoader, RandomSampler
+from torch.utils.data.distributed import DistributedSampler
+from tqdm import tqdm
+
+from transformers import (
+    MODEL_WITH_LM_HEAD_MAPPING,
+    AdamW,
+    PreTrainedModel,
+    PreTrainedTokenizer,
+    get_linear_schedule_with_warmup,
+)
+
 import src.helper as h
 from src.evaluate import evaluate
+
+try:
+    from torch.utils.tensorboard import SummaryWriter
+except ImportError:
+    from tensorboardX import SummaryWriter
+
+# Configs
+logger = logging.getLogger(__name__)
+
+MODEL_CONFIG_CLASSES = list(MODEL_WITH_LM_HEAD_MAPPING.keys())
+MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
 
 def train(args, train_dataset, model: PreTrainedModel, tokenizer: PreTrainedTokenizer):
     """Train the model"""
@@ -22,7 +49,7 @@ def train(args, train_dataset, model: PreTrainedModel, tokenizer: PreTrainedToke
     
     # Set up data sampler: 
     # distributed sampler for distributed training, else random sampler
-    train_sampler = RandomSampler(train_dataset) if args.local_rank = -1 else \
+    train_sampler = RandomSampler(train_dataset) if args.local_rank == -1 else \
                     DistributedSampler(train_dataset)
     
     # DataLoader to batch and load the training data
@@ -48,7 +75,7 @@ def train(args, train_dataset, model: PreTrainedModel, tokenizer: PreTrainedToke
         t_total = param_updates_per_epoch * args.num_train_epochs
     
     # Adjust model for distributed training if needed
-    model = model.module if hasattr(mode, "module") else model
+    model = model.module if hasattr(model, "module") else model
     # Update model's token embeddings to match tokenizer's vocabulary size
     model.resize_token_embeddings(len(tokenizer))
 
@@ -68,7 +95,7 @@ def train(args, train_dataset, model: PreTrainedModel, tokenizer: PreTrainedToke
     ]
     optimizer = AdamW(optimizer_grouped_params, lr= args.learning_rate, eps=args.adam_epsilon)
     scheduler = get_linear_schedule_with_warmup(
-        optimizer, num_warmup_steps=args.warmup_steps, num_train_steps=t_total
+        optimizer, num_warmup_steps=args.warmup_steps, num_training_steps=t_total
     )
 
     # Load optimizer and scheduler states if resuming training from a checkpoint
@@ -141,8 +168,8 @@ def train(args, train_dataset, model: PreTrainedModel, tokenizer: PreTrainedToke
     train_loss, logging_loss = 0.0, 0.0
 
     model.zero_grad()
-    train_iterator = trange(
-        epochs_trained, int(args.num_train_epochs), 
+    train_iterator = tqdm(
+        range(epochs_trained, int(args.num_train_epochs)), 
         desc="Epoch", 
         disable=args.local_rank not in [-1,0]
     )
@@ -154,7 +181,7 @@ def train(args, train_dataset, model: PreTrainedModel, tokenizer: PreTrainedToke
             # Skip already trained steps if resuming training
             if steps_trained_in_cur_epoch:
                 steps_trained_in_cur_epoch -= 1
-                should_continue
+                continue
             
             inputs, labels = (batch, batch)
             if inputs.shape[1] > 1024: continue 
@@ -179,7 +206,7 @@ def train(args, train_dataset, model: PreTrainedModel, tokenizer: PreTrainedToke
             else:
                 loss.backward()
 
-            tr_loss += loss.item()
+            train_loss += loss.item()
             # Update model parameters and learning rate every `gradient_accumulation_steps`
             if (step + 1) % args.gradient_accumulation_steps == 0:
                 # Clip gradients to prevent the "exploding gradient" problem
@@ -205,8 +232,8 @@ def train(args, train_dataset, model: PreTrainedModel, tokenizer: PreTrainedToke
                             tb_writer.add_scalar("eval_{}".format(key), value, global_step)
                     # Log learning rate and training loss
                     tb_writer.add_scalar("lr", scheduler.get_lr()[0], global_step)
-                    tb_writer.add_scalar("loss", (tr_loss - logging_loss) / args.logging_steps, global_step)
-                    logging_loss = tr_loss
+                    tb_writer.add_scalar("loss", (train_loss - logging_loss) / args.logging_steps, global_step)
+                    logging_loss = train_loss
 
                 # Save model checkpoint periodically
                 if args.local_rank in [-1, 0] and args.save_steps > 0 and global_step % args.save_steps == 0:
@@ -222,7 +249,7 @@ def train(args, train_dataset, model: PreTrainedModel, tokenizer: PreTrainedToke
                     torch.save(args, os.path.join(output_dir, "training_args.bin"))
                     logger.info("Saving model checkpoint to %s", output_dir)
 
-                    _rotate_checkpoints(args, checkpoint_prefix)
+                    h._rotate_checkpoints(args, checkpoint_prefix)
 
                     torch.save(optimizer.state_dict(), os.path.join(output_dir, "optimizer.pt"))
                     torch.save(scheduler.state_dict(), os.path.join(output_dir, "scheduler.pt"))
@@ -241,4 +268,4 @@ def train(args, train_dataset, model: PreTrainedModel, tokenizer: PreTrainedToke
         tb_writer.close()
 
     # Return global step and average training loss
-    return global_step, tr_loss / global_step
+    return global_step, train_loss / global_step
